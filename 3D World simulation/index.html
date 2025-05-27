@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D World Simulation</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: Arial, sans-serif;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            text-shadow: 0 0 5px black;
+            z-index: 100;
+            pointer-events: none;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            color: white;
+        }
+        button, select {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid #666;
+            padding: 5px 10px;
+            margin: 5px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover, select:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        #stats {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.5);
+            padding: 5px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">3D WORLD SIMULATION | WASD to move | SPACE to jump | Mouse to look</div>
+    <div id="stats">Loading...</div>
+    <div id="controls">
+        <button id="toggleRain">Toggle Rain</button>
+        <button id="toggleDay">Toggle Day/Night</button>
+        <button id="spawnAnimal">Spawn Animal</button>
+        <select id="biomeSelect">
+            <option value="grassland">Grassland</option>
+            <option value="desert">Desert</option>
+            <option value="forest">Forest</option>
+            <option value="arctic">Arctic</option>
+        </select>
+    </div>
+
+    <!-- Three.js Library -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/FirstPersonControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/objects/Water.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/objects/Sky.js"></script>
+
+    <script>
+        // ========== INITIALIZATION ==========
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // ========== WORLD PARAMETERS ==========
+        const WORLD_SIZE = 2000;
+        const CHUNK_SIZE = 500;
+        const MAX_ANIMALS = 30;
+        const MAX_TREES = 200;
+        const MAX_ROCKS = 100;
+        const MAX_CLOUDS = 20;
+
+        // Biome colors and parameters
+        const biomes = {
+            grassland: { groundColor: 0x7cfc00, waterColor: 0x1e90ff, treeDensity: 0.1, rockDensity: 0.05 },
+            desert: { groundColor: 0xf5deb3, waterColor: 0x00bfff, treeDensity: 0.01, rockDensity: 0.2 },
+            forest: { groundColor: 0x228b22, waterColor: 0x1e90ff, treeDensity: 0.3, rockDensity: 0.03 },
+            arctic: { groundColor: 0xf0ffff, waterColor: 0xadd8e6, treeDensity: 0.05, rockDensity: 0.1 }
+        };
+
+        let currentBiome = 'grassland';
+        let isRaining = false;
+        let isDay = true;
+        let animals = [];
+        let trees = [];
+        let rocks = [];
+        let clouds = [];
+
+        // ========== TERRAIN GENERATION ==========
+        function generateTerrain() {
+            // Ground
+            const groundGeometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, 100, 100);
+            
+            // Create height variations
+            const vertices = groundGeometry.attributes.position;
+            for (let i = 0; i < vertices.count; i++) {
+                const x = vertices.getX(i);
+                const z = vertices.getZ(i);
+                
+                // Perlin-like noise for terrain
+                const height = 20 * (
+                    Math.sin(x * 0.01) + 
+                    Math.sin(z * 0.01) + 
+                    Math.sin((x + z) * 0.005)
+                );
+                
+                vertices.setY(i, height);
+            }
+            groundGeometry.computeVertexNormals();
+            
+            const groundMaterial = new THREE.MeshStandardMaterial({ 
+                color: biomes[currentBiome].groundColor,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+            
+            // Water
+            const waterGeometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE);
+            const water = new THREE.Water(
+                waterGeometry,
+                {
+                    textureWidth: 512,
+                    textureHeight: 512,
+                    waterNormals: new THREE.TextureLoader().load('https://threejs.org/examples/textures/waternormals.jpg', function(texture) {
+                        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+                    }),
+                    sunDirection: new THREE.Vector3(),
+                    sunColor: 0xffffff,
+                    waterColor: biomes[currentBiome].waterColor,
+                    distortionScale: 3.0,
+                    fog: scene.fog !== undefined
+                }
+            );
+            water.rotation.x = -Math.PI / 2;
+            water.position.y = -5;
+            scene.add(water);
+            
+            return { ground, water };
+        }
+
+        // ========== ENVIRONMENT ELEMENTS ==========
+        function generateVegetation() {
+            // Clear existing vegetation
+            trees.forEach(tree => scene.remove(tree));
+            rocks.forEach(rock => scene.remove(rock));
+            trees = [];
+            rocks = [];
+            
+            // Trees
+            const treeGeometry = new THREE.ConeGeometry(5, 15, 8);
+            const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x006400 });
+            const trunkGeometry = new THREE.CylinderGeometry(1, 1, 5);
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            
+            for (let i = 0; i < MAX_TREES * biomes[currentBiome].treeDensity; i++) {
+                const x = (Math.random() - 0.5) * WORLD_SIZE * 0.9;
+                const z = (Math.random() - 0.5) * WORLD_SIZE * 0.9;
+                const y = getTerrainHeightAt(x, z);
+                
+                if (y < -3) continue; // Don't place trees underwater
+                
+                const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+                trunk.position.set(x, y, z);
+                trunk.castShadow = true;
+                
+                const leaves = new THREE.Mesh(treeGeometry, treeMaterial);
+                leaves.position.set(x, y + 10, z);
+                leaves.castShadow = true;
+                
+                scene.add(trunk);
+                scene.add(leaves);
+                trees.push(trunk, leaves);
+            }
+            
+            // Rocks
+            const rockGeometry = new THREE.DodecahedronGeometry(3, 0);
+            const rockMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x777777,
+                roughness: 0.7,
+                metalness: 0.3
+            });
+            
+            for (let i = 0; i < MAX_ROCKS * biomes[currentBiome].rockDensity; i++) {
+                const x = (Math.random() - 0.5) * WORLD_SIZE * 0.9;
+                const z = (Math.random() - 0.5) * WORLD_SIZE * 0.9;
+                const y = getTerrainHeightAt(x, z);
+                
+                if (y < -3) continue; // Don't place rocks underwater
+                
+                const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+                rock.position.set(x, y, z);
+                rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+                rock.castShadow = true;
+                scene.add(rock);
+                rocks.push(rock);
+            }
+        }
+
+        function generateClouds() {
+            // Clear existing clouds
+            clouds.forEach(cloud => scene.remove(cloud));
+            clouds = [];
+            
+            const cloudGeometry = new THREE.SphereGeometry(15, 8, 8);
+            const cloudMaterial = new THREE.MeshStandardMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            for (let i = 0; i < MAX_CLOUDS; i++) {
+                const cloud = new THREE.Mesh(cloudGeometry, cloudMaterial);
+                cloud.position.set(
+                    (Math.random() - 0.5) * WORLD_SIZE,
+                    100 + Math.random() * 50,
+                    (Math.random() - 0.5) * WORLD_SIZE
+                );
+                cloud.castShadow = true;
+                cloud.userData = {
+                    speed: 0.1 + Math.random() * 0.3,
+                    direction: new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5).normalize()
+                };
+                scene.add(cloud);
+                clouds.push(cloud);
+            }
+        }
+
+        function spawnAnimal() {
+            if (animals.length >= MAX_ANIMALS) return;
+            
+            const animalTypes = ['deer', 'rabbit', 'fox', 'bear'];
+            const type = animalTypes[Math.floor(Math.random() * animalTypes.length)];
+            
+            // Simple animal representation (cube for now)
+            const size = {
+                deer: [2, 3, 1],
+                rabbit: [0.5, 0.5, 0.5],
+                fox: [1, 1, 0.7],
+                bear: [2, 2, 1.5]
+            }[type];
+            
+            const color = {
+                deer: 0x8B4513,
+                rabbit: 0xFFFFFF,
+                fox: 0xFF8C00,
+                bear: 0x2F4F4F
+            }[type];
+            
+            const animal = new THREE.Mesh(
+                new THREE.BoxGeometry(...size),
+                new THREE.MeshStandardMaterial({ color })
+            );
+            
+            // Position on land
+            let x, z, y;
+            do {
+                x = (Math.random() - 0.5) * WORLD_SIZE * 0.8;
+                z = (Math.random() - 0.5) * WORLD_SIZE * 0.8;
+                y = getTerrainHeightAt(x, z);
+            } while (y < -2); // Ensure on land
+            
+            animal.position.set(x, y + size[1]/2, z);
+            animal.castShadow = true;
+            
+            // Animal behavior properties
+            animal.userData = {
+                type,
+                speed: 0.5 + Math.random(),
+                direction: new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5).normalize(),
+                changeDirectionTime: 0,
+                changeDirectionInterval: 3 + Math.random() * 7
+            };
+            
+            scene.add(animal);
+            animals.push(animal);
+            return animal;
+        }
+
+        // ========== WEATHER & TIME ==========
+        function setupSky() {
+            const sky = new THREE.Sky();
+            sky.scale.setScalar(10000);
+            scene.add(sky);
+
+            const skyUniforms = sky.material.uniforms;
+            skyUniforms['turbidity'].value = 10;
+            skyUniforms['rayleigh'].value = 2;
+            skyUniforms['mieCoefficient'].value = 0.005;
+            skyUniforms['mieDirectionalG'].value = 0.8;
+            
+            return sky;
+        }
+
+        function setupRain() {
+            const rainCount = 10000;
+            const rainGeometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(rainCount * 3);
+            
+            for (let i = 0; i < rainCount * 3; i += 3) {
+                positions[i] = (Math.random() - 0.5) * 200;
+                positions[i + 1] = Math.random() * 100 + 50;
+                positions[i + 2] = (Math.random() - 0.5) * 200;
+            }
+            
+            rainGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            
+            const rainMaterial = new THREE.PointsMaterial({
+                color: 0xaaaaaa,
+                size: 0.1,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const rain = new THREE.Points(rainGeometry, rainMaterial);
+            rain.visible = false;
+            scene.add(rain);
+            
+            return rain;
+        }
+
+        function toggleRain() {
+            isRaining = !isRaining;
+            rain.visible = isRaining;
+            
+            if (isRaining) {
+                water.material.uniforms['distortionScale'].value = 5.0;
+            } else {
+                water.material.uniforms['distortionScale'].value = 3.0;
+            }
+        }
+
+        function toggleDayNight() {
+            isDay = !isDay;
+            updateLighting();
+        }
+
+        function updateLighting() {
+            if (isDay) {
+                directionalLight.intensity = 1.0;
+                directionalLight.color.setHSL(0.1, 0.8, 0.9);
+                ambientLight.intensity = 0.5;
+                ambientLight.color.setHSL(0.6, 0.3, 0.9);
+            } else {
+                directionalLight.intensity = 0.1;
+                directionalLight.color.setHSL(0.6, 0.8, 0.2);
+                ambientLight.intensity = 0.2;
+                ambientLight.color.setHSL(0.6, 0.3, 0.2);
+            }
+            
+            // Update water color based on time
+            water.material.uniforms['waterColor'].value.setHSL(
+                isDay ? 0.6 : 0.7,
+                0.9,
+                isDay ? 0.7 : 0.3
+            );
+        }
+
+        // ========== UTILITY FUNCTIONS ==========
+        function getTerrainHeightAt(x, z) {
+            // Simplified version - in a real app you'd sample the actual terrain geometry
+            return 20 * (
+                Math.sin(x * 0.01) + 
+                Math.sin(z * 0.01) + 
+                Math.sin((x + z) * 0.005)
+            );
+        }
+
+        function updateStats() {
+            const statsText = `
+                Animals: ${animals.length}/${MAX_ANIMALS}
+                Trees: ${trees.length / 2}/${MAX_TREES}
+                Rocks: ${rocks.length}/${MAX_ROCKS}
+                FPS: ${Math.round(performance.now() - lastTime) / 1000 * 60}
+                Biome: ${currentBiome}
+                Time: ${isDay ? 'Day' : 'Night'}
+                Weather: ${isRaining ? 'Rainy' : 'Clear'}
+            `;
+            document.getElementById('stats').innerText = statsText;
+        }
+
+        // ========== INITIAL SETUP ==========
+        // Lighting
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        directionalLight.position.set(1, 1, 1);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        scene.add(directionalLight);
+
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+
+        // Fog
+        scene.fog = new THREE.FogExp2(0x87CEEB, 0.0002);
+
+        // Generate world
+        const { ground, water } = generateTerrain();
+        const sky = setupSky();
+        const rain = setupRain();
+        generateVegetation();
+        generateClouds();
+
+        // Spawn initial animals
+        for (let i = 0; i < 5; i++) {
+            spawnAnimal();
+        }
+
+        // ========== CONTROLS ==========
+        const controls = new THREE.FirstPersonControls(camera, renderer.domElement);
+        controls.movementSpeed = 50;
+        controls.lookSpeed = 0.05;
+        controls.lookVertical = true;
+        camera.position.set(0, 20, 50);
+
+        // Keyboard controls
+        const keys = {};
+        document.addEventListener('keydown', (e) => keys[e.code] = true);
+        document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        // UI Controls
+        document.getElementById('toggleRain').addEventListener('click', toggleRain);
+        document.getElementById('toggleDay').addEventListener('click', toggleDayNight);
+        document.getElementById('spawnAnimal').addEventListener('click', spawnAnimal);
+        document.getElementById('biomeSelect').addEventListener('change', function() {
+            currentBiome = this.value;
+            ground.material.color.setHex(biomes[currentBiome].groundColor);
+            water.material.uniforms['waterColor'].value.setHex(biomes[currentBiome].waterColor);
+            generateVegetation();
+        });
+
+        // ========== ANIMATION LOOP ==========
+        let lastTime = performance.now();
+        function animate() {
+            const now = performance.now();
+            const deltaTime = (now - lastTime) / 1000;
+            lastTime = now;
+
+            requestAnimationFrame(animate);
+            
+            // Update controls
+            if (keys['KeyW']) controls.moveForward(controls.movementSpeed * deltaTime);
+            if (keys['KeyS']) controls.moveForward(-controls.movementSpeed * deltaTime);
+            if (keys['KeyA']) controls.moveRight(-controls.movementSpeed * deltaTime);
+            if (keys['KeyD']) controls.moveRight(controls.movementSpeed * deltaTime);
+            if (keys['Space']) controls.getObject().position.y += controls.movementSpeed * deltaTime;
+            
+            controls.update(deltaTime);
+            
+            // Update water
+            water.material.uniforms['time'].value += deltaTime * 0.5;
+            
+            // Update clouds
+            clouds.forEach(cloud => {
+                cloud.position.addScaledVector(cloud.userData.direction, cloud.userData.speed);
+                
+                // Wrap around world edges
+                if (Math.abs(cloud.position.x) > WORLD_SIZE/2) cloud.position.x = -cloud.position.x * 0.9;
+                if (Math.abs(cloud.position.z) > WORLD_SIZE/2) cloud.position.z = -cloud.position.z * 0.9;
+            });
+            
+            // Update animals
+            animals.forEach(animal => {
+                animal.userData.changeDirectionTime += deltaTime;
+                
+                // Change direction periodically
+                if (animal.userData.changeDirectionTime > animal.userData.changeDirectionInterval) {
+                    animal.userData.direction = new THREE.Vector3(
+                        Math.random() - 0.5,
+                        0,
+                        Math.random() - 0.5
+                    ).normalize();
+                    animal.userData.changeDirectionTime = 0;
+                    animal.userData.changeDirectionInterval = 3 + Math.random() * 7;
+                }
+                
+                // Move animal
+                const newPos = animal.position.clone().addScaledVector(
+                    animal.userData.direction,
+                    animal.userData.speed * deltaTime
+                );
+                
+                // Keep animals on land
+                const terrainHeight = getTerrainHeightAt(newPos.x, newPos.z);
+                if (terrainHeight > -2) {
+                    animal.position.copy(newPos);
+                    animal.position.y = terrainHeight + (animal.geometry.parameters.height || animal.geometry.parameters.depth)/2;
+                    
+                    // Face direction of movement
+                    animal.lookAt(
+                        animal.position.x + animal.userData.direction.x,
+                        animal.position.y,
+                        animal.position.z + animal.userData.direction.z
+                    );
+                } else {
+                    // Turn around if heading into water
+                    animal.userData.direction.multiplyScalar(-1);
+                }
+            });
+            
+            // Update rain
+            if (isRaining) {
+                const positions = rain.geometry.attributes.position.array;
+                for (let i = 1; i < positions.length; i += 3) {
+                    positions[i] -= 10 * deltaTime;
+                    if (positions[i] < -10) {
+                        positions[i] = Math.random() * 50 + 50;
+                        positions[i-1] = (Math.random() - 0.5) * 200;
+                        positions[i+1] = (Math.random() - 0.5) * 200;
+                    }
+                }
+                rain.geometry.attributes.position.needsUpdate = true;
+            }
+            
+            updateStats();
+            renderer.render(scene, camera);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            controls.handleResize();
+        });
+
+        animate();
+    </script>
+</body>
+</html>
